@@ -1,0 +1,283 @@
+<apex:page standardController="Volunteer__c" extensions="OnsiteCheckinClass" docType="html-5.0" standardStylesheets="false" showheader="false" sidebar="false">
+      
+      <!--Include Stylsheets for the Mobile look and feel -->
+      <apex:stylesheet value="{!URLFOR($Resource.Mobile_Design_Templates, 
+                'Mobile-Design-Templates-master/common/css/app.min.css')}"/>
+      <apex:includeScript value="{!URLFOR($Resource.Mobile_Design_Templates, 
+                'Mobile-Design-Templates-master/common/js/jQuery2.0.2.min.js')}"/>
+      <apex:includeScript value="{!URLFOR($Resource.Mobile_Design_Templates, 
+                'Mobile-Design-Templates-master/common/js/jquery.touchwipe.min.js')}"/>
+      <apex:includeScript value="{!URLFOR($Resource.Mobile_Design_Templates, 
+                'Mobile-Design-Templates-master/common/js/main.min.js')}"/>
+      <apex:includeScript value="{!$Resource.forcetk}"/>
+
+      
+      <style>
+          /* default S1 color styles */
+          .list-view-header, .data-capture-buttons a {
+                background: -webkit-linear-gradient(#2a93d5,#107abb);
+                background: linear-gradient(#2a93d5,#107abb);
+                box-shadow: 0 1px 3px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.21);
+                color: white;
+                font-weight: bold;
+          }
+          
+          #resultPage, #searchPage {
+              padding-bottom: 50px;
+          }
+      </style>
+                
+     <script>
+        var dataChanged = false;
+        
+        var forcetkClient = new forcetk.Client();
+        forcetkClient.setSessionToken('{!$Api.Session_ID}');
+        forcetkClient.proxyUrl = null;
+        forcetkClient.instanceUrl = '';
+ 
+        // Log JS errors to console
+        window.onerror = function(message, url, lineNumber) {
+            console.log("Error: "+message+" in "+url+" at line "+lineNumber);
+        };
+    
+        var imageData = null;
+            var fileName = null;
+          
+            function handlePhoto(evt){
+                var file = evt.target.files[0];
+                var reader = new FileReader();
+     
+                reader.onload = (function(theFile) {
+                    return function(e) {
+                        var dataURL = e.target.result;
+    
+                        // Display thumbnail
+                        var img = $('<img class="center" width="90%">');
+                        img.attr('src', dataURL);
+                        $('#thumbnail').html(img);
+    
+                        // Extract raw base64 data from data URL
+                        imageData = dataURL.split(',')[1];
+                        fileName = file.name;
+                    };
+                })(file);
+     
+                reader.readAsDataURL(file);
+            }
+    
+        $(document).ready(function(){
+            $("#resultPage").hide();
+            findVolunteerEvents();
+          
+            $("#photoButton").click(function() {
+                $("#photoFile").click();
+            });
+          
+            $("#photoFile").change(handlePhoto);
+        });
+
+        var eventId;
+
+        function findVolunteerEvents(){
+             var lat, lon;
+             // If we can, get the position of the user via device geolocation
+             if (navigator.geolocation) {
+                 navigator.geolocation.getCurrentPosition(function(position){
+                     lat = position.coords.latitude;
+                     lon = position.coords.longitude;                    
+                     
+                     // Use Visualforce JavaScript Remoting to query for nearby warehouses      
+                     Visualforce.remoting.Manager.invokeAction('{!$RemoteAction.OnsiteCheckinClass.getNearby}', lat, lon,
+                         function(result, event){
+                             if (event.status) {
+                                console.log(result);
+                                $("#searchResults").empty();
+                         
+                                //Build the list of events based off of the result set returned from the query
+                                $.each(result, function(){
+                                    console.log('Volunteer Event: '+this.Address__c);
+                             
+                                    //this creates a list item based off of the warehouse/merchandise information
+                                    var newLi = $('<li></li>');     
+                                    var newLink = $('<a href="#" class="content"><h2>'+this.Name+'</h2><p><strong>'+this.Address__c+'<br/>'
+                                    +'</strong>'+ this.City__c+', '+this.State__c+'</p>'
+                                    +'<div class="list-view-icons"><span class="icon-right-arrow">'
+                                    +'&nbsp;</span></div></a>');
+                                     eventId = this.Id;
+                                     var eventName = this.Name;
+                             
+                                    //When an event is selected, you first need to create an invoice to relate the line item to
+                                    newLink.click(function(e) {
+                                        //This method will activate the publish button so the form can be submitted 
+                                        //Sfdc.canvas.publisher.publish({name: "publisher.setValidForSubmit", payload:"true"});
+                                        var myName = '{!$User.FirstName} {!$User.LastName}';
+                                        $("#VolunteerName").text(myName);
+                                        $("#searchPage").hide();
+                                        $("#resultPage").show();
+                                    });
+                            newLi.append(newLink);            
+                            newLi.appendTo('#searchResults');
+                         });      
+                     } else if (event.type === 'exception') {
+                         //exception case code  
+                         console.log(result);        
+                     } else {
+                                            
+                     }
+                 }, 
+                 {escape: true}
+              );
+                  });
+              } else {
+                  // Set default values for map if the device doesn't have geolocation capabilities
+                    /** San Francisco **/
+                    lat = 37.77493;
+                    lon = -122.419416;
+                    
+                    var result = [];
+                    createMap(lat, lon, result);
+              }
+        }
+
+          //The final step is to insert the volunteer based off of all the information provided
+          function insertVolunteerRecord(){
+              console.log(eventId);
+              $("#status").show();
+              Visualforce.remoting.Manager.invokeAction('{!$RemoteAction.OnsiteCheckinClass.CreateVolunteerRec}', $('#hours').val(), $('#mobilenum').val(), $('#confnum').val(), eventId,
+                  function(result, event){;
+                      if(event.status){
+                        $('#status').html("<p>Created volunteer record</p>");
+                        // Upload the image data to Chatter files
+                        forcetkClient.create('ContentVersion', {
+                            "Origin": "H",
+                            "PathOnClient": fileName,
+                            "VersionData": imageData
+                        }, function(data) {
+                            $('#status').html("<p>Uploaded image</p>");
+                                makeContentVersionPublic(data.id, 
+                                    function(){
+                                        $('#status').html("<p>Made image public</p>");
+                                        forcetkClient.update('Volunteer__c', result.Id, { 
+                                            "Image_ID__c" : data.id 
+                                        }, function(){
+                                        $('#status').html("<p>Updated volunteer</p>");
+                                        setTimeout(function(){
+                                            if( (typeof sforce != 'undefined') && (sforce != null) ) {
+                                            // Salesforce1 navigation
+                                                //alert('in here - '+result.id); 
+                                                sforce.one.navigateToSObject(result.Id);
+                                            }
+                                            else {
+                                                // Set the window's URL using a Visualforce expression
+                                                window.location.href = '/'+result.Id;  
+                                            }
+                                        }, 500);
+                                    }, onErrorSfdc);
+                                }, onErrorSfdc);          
+                            }, onErrorSfdc);
+                      } else if (event.type === 'exception'){
+                          console.log(result);
+                      } else {
+                                        
+                      }
+              });
+          }
+    
+          function onErrorSfdc(error) {
+                console.log("onErrorSfdc: " + JSON.stringify(error));
+                //alert(JSON.stringify(error));
+          }
+
+            function makeContentVersionPublic(contentVersionId, callback, error) {
+                Visualforce.remoting.Manager.invokeAction('{!$RemoteAction.OnsiteCheckinClass.makeContentPublic}', contentVersionId, 
+                function(result, event){
+                    if (event.status) {
+                        callback();
+                    } else {
+                        error(event);
+                    }
+                });
+            }
+          
+          function goBack(){
+              Sfdc.canvas.publisher.publish({name: "publisher.setValidForSubmit", payload:"false"});
+              findVolunteerEvents();
+              $("#searchPage").show();
+              $("#resultPage").hide();    
+          }
+     </script>
+        
+        <apex:form id="form">
+        <section id="status" style="text-align: center; display: none;"></section>
+        <!-- this is the view for the inital search page -->
+        <div id="searchPage">
+          <div id="searchResultsSection">   
+            <div class="list-view-header">Nearby Events</div>
+                <ul id="searchResults" class="list-view right-one-icons">
+                </ul>
+          </div> <!-- end searchResults -->
+        </div> <!-- end search page -->
+        
+        <!-- this page displays the form to add order criteria -->
+        <div id="resultPage">
+        <div class="list-view-header">Create Volunteer Record</div>
+            <div>
+                <section class="border-bottom">
+                 <div class="content">
+                  <h3>Name</h3>
+                  <div class="form-control-group">
+                   <div class="form-control form-control-text">
+                    <h1 id="VolunteerName" />
+                   </div>
+                  </div>
+                 </div>
+                </section>
+                
+                <section class="border-bottom">
+                 <div class="content">
+                  <h3><apex:outputLabel value="Mobile" /></h3>
+                      <div class="form-control-group">
+                       <div class="form-control form-control-text">
+                           <input type="text" id="mobilenum" value="{!$User.Phone}" />
+                       </div>
+                     </div>
+                 </div>
+                        
+                 <div class="content">
+                  <h3><apex:outputLabel value="Total Hours" /></h3>
+                  <div class="form-control-group">
+                   <div class="form-control form-control-text">
+                      <input type="text" id="hours" />
+                   </div>
+                  </div>
+                 </div>
+                    
+                 <div class="content">
+                  <h3><apex:outputLabel value="Confirmation Number" /></h3>
+                  <div class="form-control-group">
+                   <div class="form-control form-control-text">
+                      <input type="text" id="confnum" />
+                   </div>
+                  </div>
+                 </div>
+                </section>
+                <section id="thumbnail">
+                </section>
+                <section class="data-capture-buttons one-buttons">
+                    <div class="content">
+                        <input id="photoFile" type="file" accept="image/*" style="display: none;"/>
+                        <a id="photoButton" href="#">Take Photo</a>
+                    </div>
+                </section>
+                <section class="data-capture-buttons one-buttons">
+                    <div class="content">
+                        <section class="data-capture-buttons one-buttons">
+                             <!--<a href="#" id="goBack" onClick="goBack();" >back</a>-->
+                             <a href="#" id="mysubmit" onClick="insertVolunteerRecord();" >submit</a>
+                        </section>
+                    </div>
+                </section>
+          </div> 
+        </div> <!-- end result page -->
+        </apex:form>
+</apex:page>
